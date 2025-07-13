@@ -178,7 +178,7 @@ def mode_selection_loop():
                 elif path_btn.collidepoint(event.pos):
                     return MODE_PATH
 
-# Start with mode selection
+# Start screen - mode selection
 current_mode = mode_selection_loop()
 
 
