@@ -181,7 +181,6 @@ def mode_selection_loop():
 # Start screen - mode selection
 current_mode = mode_selection_loop()
 
-
 # Main
 running = True
 while running:
