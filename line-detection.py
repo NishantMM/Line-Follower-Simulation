@@ -9,7 +9,7 @@ screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Robot Simulation with Pause & Obstacle Avoidance")
 clock = pygame.time.Clock()
 
-# Colors
+# Colours
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 ROBOT_COLOR = (0, 180, 0)
