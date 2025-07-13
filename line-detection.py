@@ -182,7 +182,7 @@ def mode_selection_loop():
 current_mode = mode_selection_loop()
 
 
-# Main loop
+# Main
 running = True
 while running:
     screen.fill(WHITE)
