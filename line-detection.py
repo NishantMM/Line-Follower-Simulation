@@ -28,7 +28,7 @@ buttons = {
     "Reset": pygame.Rect(120, 20, 80, 35),
     "Go": pygame.Rect(220, 20, 80, 35),
     "Pause": pygame.Rect(320, 20, 80, 35),
-    "Exit": pygame.Rect(420, 20, 80, 35)  # Added Exit button
+    "Exit": pygame.Rect(420, 20, 80, 35)
 }
 
 speed_values = [1, 2, 3, 4, 5]
@@ -42,9 +42,9 @@ MODE_PATH = "Free Path Mode"
 current_mode = None
 
 # Robot
-robot_pos = [50, HEIGHT - 50]
-robot_angle = 0
-robot_index = 0
+robot_pos = [50.0, float(HEIGHT - 50)]
+robot_angle = 0.0
+robot_index = 0                # used for path-follow index
 robot_moving = False
 robot_paused = False
 dot_accumulator = 0
@@ -143,26 +143,50 @@ def draw_speed_dropdown():
 def draw_obstacles():
     for ox, oy, r in obstacles:
         pygame.draw.circle(screen, OBSTACLE_COLOR, (ox, oy), r)
-    for (tx, ty) in selected_targets:  # treat targets as obstacles
+    for (tx, ty) in selected_targets:  # mark targets with a circle outline
         pygame.draw.circle(screen, SELECTED_COLOR, (tx, ty), 20, 2)
 
 
-def avoid_obstacles(pos, angle):
-    ahead_x = pos[0] + math.cos(angle) * 25
-    ahead_y = pos[1] + math.sin(angle) * 25
-    avoid = False
-    all_obstacles = obstacles.copy() + [(tx, ty, 20) for tx, ty in selected_targets]
+def shortest_angle_diff(a, b):
+    diff = (b - a + math.pi) % (2 * math.pi) - math.pi
+    return diff
+
+
+def lerp_angle(a, b, t):
+    diff = shortest_angle_diff(a, b)
+    return a + diff * t
+
+
+def avoid_obstacles(pos, angle, lookahead=25, current_target=None):
+    ahead_x = pos[0] + math.cos(angle) * lookahead
+    ahead_y = pos[1] + math.sin(angle) * lookahead
+    all_obstacles = list(obstacles) + [(tx, ty, 20) for tx, ty in selected_targets if current_target is None or (tx, ty) != current_target]
+
+    if not all_obstacles:
+        return angle
+
+    collision = False
     for ox, oy, r in all_obstacles:
         if distance((ahead_x, ahead_y), (ox, oy)) < r + 10:
-            avoid = True
+            collision = True
             break
-    if avoid:
-        left = angle + 1.2
-        right = angle - 1.2
-        dist_left = min([distance((pos[0] + math.cos(left) * 25, pos[1] + math.sin(left) * 25), (ox, oy)) for (ox, oy, r) in all_obstacles])
-        dist_right = min([distance((pos[0] + math.cos(right) * 25, pos[1] + math.sin(right) * 25), (ox, oy)) for (ox, oy, r) in all_obstacles])
-        return left if dist_left > dist_right else right
-    return angle
+
+    if not collision:
+        return angle
+
+    offsets = [0.8, -0.8, 1.6, -1.6]
+    best_angle = angle
+    best_min_dist = -1
+    for off in offsets:
+        test_angle = angle + off
+        test_ahead = (pos[0] + math.cos(test_angle) * lookahead, pos[1] + math.sin(test_angle) * lookahead)
+        min_dist = min([distance(test_ahead, (ox, oy)) - r for (ox, oy, r) in all_obstacles])
+        if min_dist > best_min_dist:
+            best_min_dist = min_dist
+            best_angle = test_angle
+
+    return best_angle
+
 
 # Mode selection
 def mode_selection_loop():
@@ -177,6 +201,7 @@ def mode_selection_loop():
                     return MODE_TARGET
                 elif path_btn.collidepoint(event.pos):
                     return MODE_PATH
+
 
 # Start screen - mode selection
 current_mode = mode_selection_loop()
@@ -224,10 +249,10 @@ while running:
                                 path_points.clear()
                                 for obj in translucent_objects:
                                     obj["selected"] = False
-                                robot_pos = [50, HEIGHT - 50]
+                                robot_pos = [50.0, float(HEIGHT - 50)]
                                 robot_moving = False
                             elif name == "Reset":
-                                robot_pos = [50, HEIGHT - 50]
+                                robot_pos = [50.0, float(HEIGHT - 50)]
                                 robot_index = 0
                                 target_index = 0
                                 robot_moving = False
@@ -277,32 +302,69 @@ while running:
 
     if current_mode == MODE_PATH and len(path_points) > 1:
         pygame.draw.lines(screen, LINE_COLOR, False, path_points, 3)
+        for p in path_points[::max(1, len(path_points)//80)]:
+            pygame.draw.circle(screen, BLACK, p, 2)
 
+    # Movement
     if robot_moving and not robot_paused:
+
         if current_mode == MODE_TARGET and target_index < len(selected_targets):
             target = selected_targets[target_index]
             dx, dy = target[0] - robot_pos[0], target[1] - robot_pos[1]
             dist = math.hypot(dx, dy)
-            if dist < 5:
+
+            SNAP_THRESHOLD = 6        # snap when within this many pixels
+            AVOID_DISABLE_DIST = 50   # don't use aggressive avoidance inside this radius
+            LOOKAHEAD_BASE = 20
+            TURN_SMOOTH = 0.28
+
+            if dist <= SNAP_THRESHOLD:
+                robot_pos[0], robot_pos[1] = target[0], target[1]
+                robot_angle = math.atan2(dy, dx)
                 target_index += 1
             else:
-                angle = math.atan2(dy, dx)
-                robot_angle = avoid_obstacles(robot_pos, angle)
-                robot_pos[0] += robot_speed * math.cos(robot_angle)
-                robot_pos[1] += robot_speed * math.sin(robot_angle)
+                angle_to_target = math.atan2(dy, dx)
+                lookahead = LOOKAHEAD_BASE + robot_speed * 6
+
+                if dist > AVOID_DISABLE_DIST:
+                    desired_angle = avoid_obstacles(robot_pos, angle_to_target, lookahead=lookahead, current_target=target)
+                else:
+                    desired_angle = angle_to_target
+
+                robot_angle = lerp_angle(robot_angle, desired_angle, TURN_SMOOTH)
+                step = min(robot_speed, dist)
+                robot_pos[0] += step * math.cos(robot_angle)
+                robot_pos[1] += step * math.sin(robot_angle)
+
                 draw_robot(robot_pos, robot_angle)
+
         elif current_mode == MODE_PATH and robot_index < len(path_points):
-            if dot_accumulator <= 0:
-                pos = path_points[robot_index]
-                if robot_index + 1 < len(path_points):
-                    next_pos = path_points[robot_index + 1]
-                    angle = math.atan2(next_pos[1] - pos[1], next_pos[0] - pos[0])
-                    robot_angle = avoid_obstacles(pos, angle)
-                draw_robot(pos, robot_angle)
-                pygame.draw.circle(screen, BLACK, pos, 2)
-                dot_accumulator = dot_interval
-            dot_accumulator -= robot_speed
-            robot_index += 1
+            # path-specific tuning
+            PATH_SNAP = 4                 # threshold to advance to next point
+            path_speed_factor = 0.6       # scale down speed in path mode (tune this)
+            PATH_TURN_SMOOTH = 0.30
+            LOOKAHEAD_PATH = 18
+
+            target = path_points[robot_index]
+            dx, dy = target[0] - robot_pos[0], target[1] - robot_pos[1]
+            dist = math.hypot(dx, dy)
+
+            if dist <= PATH_SNAP:
+                robot_index += 1
+            else:
+                angle_to_target = math.atan2(dy, dx)
+
+                desired_angle = avoid_obstacles(robot_pos, angle_to_target, lookahead=LOOKAHEAD_PATH, current_target=target)
+
+                # smooth turning
+                robot_angle = lerp_angle(robot_angle, desired_angle, PATH_TURN_SMOOTH)
+                
+                step = min(robot_speed * path_speed_factor, dist)
+                robot_pos[0] += step * math.cos(robot_angle)
+                robot_pos[1] += step * math.sin(robot_angle)
+
+            draw_robot(robot_pos, robot_angle)
+
         else:
             draw_robot(robot_pos, robot_angle)
     else:
